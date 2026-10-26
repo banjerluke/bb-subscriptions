@@ -76,8 +76,8 @@ async function fetchOne(id: string, { config, signal }: ProviderContext): Promis
 
 export const github: Provider = {
   id: 'github', label: 'GitHub pull request', example: 'owner/repo#123', commentField: 'comments',
-  // A draft marked ready, and checks that pass or are still running; failing checks still report.
-  routine: (key, before, after) => key === 'state' ? before === 'draft' && after === 'open' : key === 'checks' && after !== 'failure' && after !== 'error',
+  // A draft marked ready, new commits, and checks that pass or are still running; failing checks still report.
+  routine: (key, before, after) => key === 'state' ? before === 'draft' && after === 'open' : key === 'commit' || (key === 'checks' && after !== 'failure' && after !== 'error'),
   settings: {
     githubRepository: { type: 'string', label: 'Default GitHub repository (owner/repo)', description: 'Enables bare PR numbers outside a project thread. Project threads infer this from their git remote.', default: '' },
   },

@@ -14,4 +14,4 @@ Use the `thread_subscriptions` tool (or `bb subscriptions`) when the user asks t
 - A "rate limit" or "budget" error pauses that platform until Linear's hourly window resets. Nothing is lost; the next check runs after the pause.
 - GitHub reads go through the `gh` CLI on the bb server; "gh lookup failed" means it is not installed or not logged in there.
 - Comments by authors in the `ignoredCommentAuthors` setting (comma-separated GitHub logins and Linear user names) never send updates. Read the current list with `bb plugin config subscriptions`; `set ignoredCommentAuthors "<full list>"` replaces it.
-- With the `ignoreRoutineChanges` setting on, passing or running checks and a draft marked ready send no update; only failing checks do. To wait for CI to pass, use `gh pr checks <number> --watch` rather than waiting for a subscription message.
+- With the `ignoreRoutineChanges` setting on, new commits, passing or running checks and a draft marked ready send no update; only failing checks do. To wait for CI to pass, use `gh pr checks <number> --watch` rather than waiting for a subscription message.

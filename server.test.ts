@@ -46,13 +46,13 @@ describe('IDs and summaries', () => {
     expect(transition('o/r#1', before, { ...after, state: 'merged' }, { commentField: 'comments' })).toBe('[o/r#1](https://github.com/o/r/pull/1): open → merged.');
     expect(transition('o/r#1', { ...before, ignored: 'linear-code' }, after, { commentField: 'comments' })).toContain('comments: 2 latest by linear-code at t2 → 1 latest by luke at t1');
   });
-  it('leaves out a draft marked ready and checks short of failing under the GitHub routine rule', () => {
-    const draft: Snapshot = { ...snapshot, state: 'draft', fields: { checks: '' } };
-    const ready: Snapshot = { ...snapshot, state: 'open', fields: { checks: 'success' } };
+  it('leaves out a draft marked ready, new commits and checks short of failing under the GitHub routine rule', () => {
+    const draft: Snapshot = { ...snapshot, state: 'draft', fields: { checks: '', commit: 'aaa' } };
+    const ready: Snapshot = { ...snapshot, state: 'open', fields: { checks: 'success', commit: 'bbb' } };
     const { routine } = provider('github');
-    expect(transition('o/r#1', draft, ready)).toBe('[o/r#1](https://github.com/o/r/pull/1): draft → open; checks: none → success.');
+    expect(transition('o/r#1', draft, ready)).toBe('[o/r#1](https://github.com/o/r/pull/1): draft → open; checks: none → success; commit: aaa → bbb.');
     expect(transition('o/r#1', draft, ready, { routine })).toBeNull();
-    expect(transition('o/r#1', draft, { ...snapshot, state: 'merged', fields: { checks: 'failure' } }, { routine })).toBe('[o/r#1](https://github.com/o/r/pull/1): draft → merged; checks: none → failure.');
+    expect(transition('o/r#1', draft, { ...snapshot, state: 'merged', fields: { checks: 'failure', commit: 'bbb' } }, { routine })).toBe('[o/r#1](https://github.com/o/r/pull/1): draft → merged; checks: none → failure.');
   });
 });
 it('infers a GitHub repository from the subscribing thread project for bare PR numbers', async () => {
