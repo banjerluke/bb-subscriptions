@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { defineRpcContract, type BbPluginApi } from '@get-bb/plugin-sdk';
 import { z } from 'zod';
-import { compose, describe, snapshotSchema, subscriptionSchema, type Snapshot } from './model';
+import { compose, describe, snapshotSchema, subscriptionSchema, type CompareRules, type Snapshot } from './model';
 import { fetchBatch, githubRepositoryFromRemote, isBareNumber, platformSchema, provider, providers, providerSettings, ProviderError, type ProviderConfig } from './providers';
 
 const scope = z.object({ threadId: z.string().min(1).max(200) });
@@ -22,6 +22,7 @@ export default function plugin(bb: BbPluginApi) {
   const settings = bb.settings.define({
     intervalSeconds: { type: 'number', label: 'Check interval in seconds', default: 60, experimental_schema: z.number().int().min(30).max(3600) },
     debounceSeconds: { type: 'number', label: 'Debounce notifications within (seconds)', description: 'Changes seen within this window go out as one message. While a thread is busy, later changes rewrite the message already waiting for it.', default: 10, experimental_schema: z.number().int().min(0).max(600) },
+    ignoreRoutineChanges: { type: 'boolean', label: 'Skip routine PR changes', description: 'Send no update for checks that pass or are still running, or for a draft marked ready for review. Failing checks still report.', default: false },
     ignoredCommentAuthors: { type: 'string', label: 'Ignore comments by', description: 'Comma-separated GitHub logins and Linear user names, matched case-insensitively. Their comments and comment edits send no updates.', default: '', experimental_schema: z.string().max(1000) },
     ...providerSettings,
   });
@@ -29,6 +30,7 @@ export default function plugin(bb: BbPluginApi) {
   bb.storage.migrate(db, [`CREATE TABLE subscriptions (thread TEXT NOT NULL, platform TEXT NOT NULL, id TEXT NOT NULL, snapshot TEXT, error TEXT, checked INTEGER, due INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0, generation TEXT NOT NULL, PRIMARY KEY(thread, platform, id))`,
     `CREATE TABLE pending (thread TEXT PRIMARY KEY, baselines TEXT NOT NULL, flush_at INTEGER NOT NULL, dirty INTEGER NOT NULL DEFAULT 1, queued_id TEXT, queued_updated INTEGER)`]);
   const changed = (threadId: string) => bb.realtime.publish('subscriptions-changed', { threadId });
+  const rules = (platform: string, config: ProviderConfig): CompareRules => ({ commentField: provider(platform).commentField, routine: config.ignoreRoutineChanges ? provider(platform).routine : undefined });
   const rows = (threadId: string) => db.prepare('SELECT * FROM subscriptions WHERE thread = ? ORDER BY platform, id').all(threadId) as Row[];
   const list = async ({ threadId }: z.infer<typeof scope>) => ({
     subscriptions: rows(threadId).map(row => ({ platform: row.platform, id: row.id, snapshot: row.snapshot ? snapshotSchema.parse(JSON.parse(row.snapshot)) : null, error: row.error, checkedAt: row.checked })),
@@ -154,7 +156,7 @@ export default function plugin(bb: BbPluginApi) {
         else paused.delete(platform);
       }
       if (signal.aborted) return;
-      for (const row of group) await deliver(row, items.get(row.id) ?? new ProviderError('No result returned for this item; will retry.'), interval, debounce, signal);
+      for (const row of group) await deliver(row, items.get(row.id) ?? new ProviderError('No result returned for this item; will retry.'), interval, debounce, rules(platform, config), signal);
     }
   }
 
@@ -171,6 +173,7 @@ export default function plugin(bb: BbPluginApi) {
   }
   /** Send or rewrite one message per thread whose debounce window has passed. */
   async function flush(signal: AbortSignal) {
+    const config = await settings.get() as ProviderConfig;
     const ready = db.prepare('SELECT * FROM pending WHERE dirty=1 AND flush_at <= ?').all(Date.now()) as Pending[];
     for (const pending of ready) {
       if (signal.aborted) return;
@@ -182,7 +185,7 @@ export default function plugin(bb: BbPluginApi) {
         for (const [key, before] of Object.entries(baselines)) {
           const [platform, id] = key.split(/:(.*)/s);
           const row = db.prepare('SELECT snapshot FROM subscriptions WHERE thread=? AND platform=? AND id=?').get(current.thread, platform, id) as Pick<Row, 'snapshot'> | undefined;
-          const line = row?.snapshot ? describe(id, before, snapshotSchema.parse(JSON.parse(row.snapshot)), provider(platform).commentField) : null;
+          const line = row?.snapshot ? describe(id, before, snapshotSchema.parse(JSON.parse(row.snapshot)), rules(platform, config)) : null;
           if (line) lines.push(line);
         }
         const text = compose(lines);
@@ -207,7 +210,7 @@ export default function plugin(bb: BbPluginApi) {
     }
   }
 
-  function deliver(row: Row, outcome: Snapshot | ProviderError, interval: number, debounce: number, signal: AbortSignal) {
+  function deliver(row: Row, outcome: Snapshot | ProviderError, interval: number, debounce: number, compare: CompareRules, signal: AbortSignal) {
     return serial(async () => {
       const current = db.prepare('SELECT * FROM subscriptions WHERE thread=? AND platform=? AND id=?').get(row.thread, row.platform, row.id) as Row | undefined;
       if (!current || current.generation !== row.generation || signal.aborted) return;
@@ -215,7 +218,7 @@ export default function plugin(bb: BbPluginApi) {
         if (outcome instanceof ProviderError) throw outcome;
         const snapshot = snapshotSchema.parse(outcome);
         const before = current.snapshot ? snapshotSchema.parse(JSON.parse(current.snapshot)) : null;
-        if (before && describe(row.id, before, snapshot, provider(row.platform).commentField)) record(row.thread, `${row.platform}:${row.id}`, before, debounce);
+        if (before && describe(row.id, before, snapshot, compare)) record(row.thread, `${row.platform}:${row.id}`, before, debounce);
         db.prepare('UPDATE subscriptions SET snapshot=?,error=NULL,checked=?,due=?,failures=0 WHERE thread=? AND platform=? AND id=?').run(JSON.stringify(snapshot), Date.now(), Date.now() + interval, row.thread, row.platform, row.id);
       } catch (cause) {
         const delay = cause instanceof ProviderError ? cause.retryMs : 60_000;

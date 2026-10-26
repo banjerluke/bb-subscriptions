@@ -51,6 +51,8 @@ bb plugin config subscriptions set intervalSeconds 60
 bb plugin config subscriptions set debounceSeconds 10
 # Comments and comment edits by these GitHub logins or Linear user names send no updates (default: none)
 bb plugin config subscriptions set ignoredCommentAuthors "linear-code, my-bot"
+# No updates for checks that pass or are still running, or for a draft marked ready (default false)
+bb plugin config subscriptions set ignoreRoutineChanges true
 ```
 
 ## Behavior
@@ -59,6 +61,7 @@ bb plugin config subscriptions set ignoredCommentAuthors "linear-code, my-bot"
 - GitHub: open/draft/closed/merged, commit, review decision, latest review, check rollup, assignees, labels and comments.
 - Linear: status, assignee, priority, labels and latest comment. A changed update timestamp without a specific field difference produces “updated”.
 - `ignoredCommentAuthors` (comma-separated, case-insensitive) leaves those authors out of the comment field. GitHub then counts everyone else's comments and reports the latest of them from the last 100; a PR with more than 100 comments shows no count. Linear reports the most recently updated comment by anyone else among the last 20. Their reviews, commits and other activity still report. Changing the list re-reads every item without sending updates for the recount; a comment that lands during that one check goes unreported.
+- `ignoreRoutineChanges` leaves out changes that need no action: a draft PR marked ready for review, and checks moving to anything but failure or error. They still update the stored state, so a later message never repeats them. Failing checks, reviews, merges and everything else still report.
 - Example: `[Subscription update] [owner/repo#123](https://github.com/owner/repo/pull/123): open → merged; checks: pending → success.` Several items changing together become one bulleted message.
 - **One message per thread, never a stack.** A brand-new message is held for `debounceSeconds` so changes arriving together go out as one. If the thread is busy, bb queues the message and the plugin remembers it; any further change rewrites that same queued message straight away (no debounce) with the full diff since the agent last looked, so an idle agent always reads one current summary rather than several stale ones. Once the message is read (or removed from the queue), the next change starts a new one.
 - Unchanged snapshots do not send, and a bumped `updatedAt` with no tracked field change is ignored. Failed reads/sends retain the previous baseline and back off, up to an hour. `gh` processes have 20-second timeouts and are cancelled on shutdown/reload.
@@ -81,7 +84,7 @@ SUBSCRIPTIONS_LIVE=1 LINEAR_API_KEY=lin_api_… npm test -- providers.live.test.
 
 If every server test fails with "Could not locate the bindings file", `npm ci` did not fetch a `better-sqlite3` binary for your Node version. Run `npx prebuild-install` inside `node_modules/better-sqlite3` (or `npm rebuild better-sqlite3`) once.
 
-Tests cover bulk/scoped commands, normalization, silent baselines, change delivery, failed-send retry, unsubscribe races, batched lookups, provider pauses, Linear request shape and rate-limit handling, ignored comment authors, archived/deleted threads, reload persistence, backoff, public SDK imports, and the heading count. The opt-in live tests read one PR authored by the current GitHub account and one accessible Linear issue; they change neither provider nor thread state.
+Tests cover bulk/scoped commands, normalization, silent baselines, change delivery, failed-send retry, unsubscribe races, batched lookups, provider pauses, Linear request shape and rate-limit handling, ignored comment authors, routine changes, archived/deleted threads, reload persistence, backoff, public SDK imports, and the heading count. The opt-in live tests read one PR authored by the current GitHub account and one accessible Linear issue; they change neither provider nor thread state.
 
 ### Adding a service
 

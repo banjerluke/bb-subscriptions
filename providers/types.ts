@@ -21,6 +21,8 @@ export interface Provider {
   settings: Record<string, PluginSettingDescriptor>;
   /** The `fields` key built from comments, which leaves out `ignoredAuthors(config)` and stamps them on the snapshot. */
   commentField: string;
+  /** Changes that need nothing from the thread, left out while `ignoreRoutineChanges` is on. `key` is `state` or a `fields` key. */
+  routine?(key: string, before: string, after: string): boolean;
   /** Normalise user input (ID, URL, bare number) or throw with a usable message. */
   canonical(raw: string, ctx: { config: ProviderConfig; repository?: string }): string;
   /** Read the current state of one or more items. Missing keys are treated as lookup failures. */

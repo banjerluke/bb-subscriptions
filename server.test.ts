@@ -42,9 +42,17 @@ describe('IDs and summaries', () => {
   it('skips the comment field, and only it, between snapshots read with different ignored authors', () => {
     const before: Snapshot = { ...snapshot, fields: { checks: 'pending', comments: '2 (latest by linear-code at t2)' } };
     const after: Snapshot = { ...snapshot, ignored: 'linear-code', fields: { checks: 'pending', comments: '1 (latest by luke at t1)' } };
-    expect(transition('o/r#1', before, after, 'comments')).toBeNull();
-    expect(transition('o/r#1', before, { ...after, state: 'merged' }, 'comments')).toBe('[o/r#1](https://github.com/o/r/pull/1): open → merged.');
-    expect(transition('o/r#1', { ...before, ignored: 'linear-code' }, after, 'comments')).toContain('comments: 2 latest by linear-code at t2 → 1 latest by luke at t1');
+    expect(transition('o/r#1', before, after, { commentField: 'comments' })).toBeNull();
+    expect(transition('o/r#1', before, { ...after, state: 'merged' }, { commentField: 'comments' })).toBe('[o/r#1](https://github.com/o/r/pull/1): open → merged.');
+    expect(transition('o/r#1', { ...before, ignored: 'linear-code' }, after, { commentField: 'comments' })).toContain('comments: 2 latest by linear-code at t2 → 1 latest by luke at t1');
+  });
+  it('leaves out a draft marked ready and checks short of failing under the GitHub routine rule', () => {
+    const draft: Snapshot = { ...snapshot, state: 'draft', fields: { checks: '' } };
+    const ready: Snapshot = { ...snapshot, state: 'open', fields: { checks: 'success' } };
+    const { routine } = provider('github');
+    expect(transition('o/r#1', draft, ready)).toBe('[o/r#1](https://github.com/o/r/pull/1): draft → open; checks: none → success.');
+    expect(transition('o/r#1', draft, ready, { routine })).toBeNull();
+    expect(transition('o/r#1', draft, { ...snapshot, state: 'merged', fields: { checks: 'failure' } }, { routine })).toBe('[o/r#1](https://github.com/o/r/pull/1): draft → merged; checks: none → failure.');
   });
 });
 it('infers a GitHub repository from the subscribing thread project for bare PR numbers', async () => {
@@ -88,6 +96,19 @@ it('re-reads every item when the ignored authors change without sending a burst 
   resolveAll({ ...before, ignored: 'linear-code', fields: { checks: 'pending', comments: '2 (latest by tyler at t5)' } }); await due(h);
   await cycle(h, () => expect(h.harness.inspection.sdk.callsTo('threads.send')).toHaveLength(1));
   expect(sentText(h)).toBe('[Subscription update] [o/r#1](https://github.com/o/r/pull/1): comments: 1 latest by luke at t1 → 2 latest by tyler at t5.');
+});
+it('sends no update for routine changes once ignoreRoutineChanges is on', async () => {
+  const h = host(); const draft: Snapshot = { ...snapshot, state: 'draft', fields: { checks: '' } };
+  resolveAll(draft);
+  await h.harness.behavior.callRpc('subscribe', input);
+  await cycle(h, () => expect(h.harness.realtimeSignals.length).toBe(2));
+  resolveAll({ ...draft, state: 'open', fields: { checks: 'success' } });
+  await h.harness.behavior.setSettings({ debounceSeconds: 0, ignoreRoutineChanges: true });
+  await cycle(h, () => expect(h.harness.realtimeSignals.length).toBe(3));
+  expect(h.harness.inspection.sdk.callsTo('threads.send')).toHaveLength(0);
+  resolveAll({ ...draft, state: 'open', fields: { checks: 'failure' } }); await due(h);
+  await cycle(h, () => expect(h.harness.inspection.sdk.callsTo('threads.send')).toHaveLength(1));
+  expect(sentText(h)).toBe('[Subscription update] [o/r#1](https://github.com/o/r/pull/1): checks: success → failure.');
 });
 it('preserves baseline on delivery failure and retries without losing the change', async () => {
   const h = host(); resolveAll(snapshot);

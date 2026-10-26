@@ -13,17 +13,19 @@ export const subscriptionSchema = z.object({
 });
 export type Subscription = z.infer<typeof subscriptionSchema>;
 const clean = (s: string) => s.replace(/[\r\n\t]/g, ' ').replace(/[\[\]<>`()]/g, '').slice(0, 180);
+/** How a platform's snapshots compare: its comment field, and the changes left out as routine (`key` is `state` or a field). */
+export interface CompareRules { commentField?: string; routine?: (key: string, before: string, after: string) => boolean }
 /**
  * One item's changes between two snapshots, or null when nothing the plugin tracks changed.
  * Snapshots read under different ignored authors count comments differently, so `commentField` is skipped between them.
  */
-export function describe(id: string, before: Snapshot, after: Snapshot, commentField?: string): string | null {
+export function describe(id: string, before: Snapshot, after: Snapshot, { commentField, routine }: CompareRules = {}): string | null {
   const changes: string[] = [];
   const skip = (before.ignored ?? '') !== (after.ignored ?? '') ? commentField : undefined;
-  if (before.state !== after.state) changes.push(`${clean(before.state)} → ${clean(after.state)}`);
+  if (before.state !== after.state && !routine?.('state', before.state, after.state)) changes.push(`${clean(before.state)} → ${clean(after.state)}`);
   if (before.title !== after.title) changes.push('title updated');
   for (const key of new Set([...Object.keys(before.fields), ...Object.keys(after.fields)])) {
-    if (key !== skip && before.fields[key] !== after.fields[key]) changes.push(`${clean(key)}: ${clean(before.fields[key] || 'none')} → ${clean(after.fields[key] || 'none')}`);
+    if (key !== skip && before.fields[key] !== after.fields[key] && !routine?.(key, before.fields[key] ?? '', after.fields[key] ?? '')) changes.push(`${clean(key)}: ${clean(before.fields[key] || 'none')} → ${clean(after.fields[key] || 'none')}`);
   }
   if (!changes.length) return null;
   return `[${clean(id)}](${after.url}): ${changes.slice(0, 5).join('; ')}${changes.length > 5 ? '; other fields updated' : ''}.`;
