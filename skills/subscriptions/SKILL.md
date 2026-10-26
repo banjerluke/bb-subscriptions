@@ -13,3 +13,4 @@ Use the `thread_subscriptions` tool (or `bb subscriptions`) when the user asks t
 - Linear needs a personal API key in plugin settings (`bb plugin config subscriptions set linearApiKey …`). Only the **Read** permission is required. If every Linear item reports "API key not set" or "rejected", that setting is the fix; do not retry in a loop.
 - A "rate limit" or "budget" error pauses that platform until Linear's hourly window resets. Nothing is lost; the next check runs after the pause.
 - GitHub reads go through the `gh` CLI on the bb server; "gh lookup failed" means it is not installed or not logged in there.
+- Comments by authors in the `ignoredCommentAuthors` setting (comma-separated GitHub logins and Linear user names) never send updates. Read the current list with `bb plugin config subscriptions`; `set ignoredCommentAuthors "<full list>"` replaces it.

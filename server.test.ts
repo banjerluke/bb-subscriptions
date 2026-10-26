@@ -39,6 +39,13 @@ describe('IDs and summaries', () => {
     expect(transition('o/r#1', snapshot, { ...snapshot, state: 'merged', fields: { checks: 'success' } })).toBe('[o/r#1](https://github.com/o/r/pull/1): open → merged; checks: pending → success.');
     expect(transition('o/r#1', snapshot, { ...snapshot, updatedAt: '2026-02-02' })).toBeNull();
   });
+  it('skips the comment field, and only it, between snapshots read with different ignored authors', () => {
+    const before: Snapshot = { ...snapshot, fields: { checks: 'pending', comments: '2 (latest by linear-code at t2)' } };
+    const after: Snapshot = { ...snapshot, ignored: 'linear-code', fields: { checks: 'pending', comments: '1 (latest by luke at t1)' } };
+    expect(transition('o/r#1', before, after, 'comments')).toBeNull();
+    expect(transition('o/r#1', before, { ...after, state: 'merged' }, 'comments')).toBe('[o/r#1](https://github.com/o/r/pull/1): open → merged.');
+    expect(transition('o/r#1', { ...before, ignored: 'linear-code' }, after, 'comments')).toContain('comments: 2 latest by linear-code at t2 → 1 latest by luke at t1');
+  });
 });
 it('infers a GitHub repository from the subscribing thread project for bare PR numbers', async () => {
   const h = host();
@@ -65,6 +72,22 @@ it('sets a silent baseline, wakes on changes, and does not repeat unchanged upda
   await cycle(h, () => expect(h.harness.inspection.sdk.callsTo('threads.send')).toHaveLength(1));
   await due(h); await cycle(h, () => expect(vi.mocked(fetchBatch)).toHaveBeenCalledTimes(3));
   expect(h.harness.inspection.sdk.callsTo('threads.send')).toHaveLength(1);
+});
+it('re-reads every item when the ignored authors change without sending a burst of updates', async () => {
+  const h = host(); const before: Snapshot = { ...snapshot, fields: { checks: 'pending', comments: '2 (latest by linear-code at t2)' } };
+  resolveAll(before);
+  await h.harness.behavior.callRpc('subscribe', input);
+  await cycle(h, () => expect(h.harness.realtimeSignals.length).toBe(2));
+  resolveAll({ ...before, ignored: 'linear-code', fields: { checks: 'pending', comments: '1 (latest by luke at t1)' } });
+  await h.harness.behavior.setSettings({ debounceSeconds: 0, ignoredCommentAuthors: 'linear-code' });
+  await cycle(h, () => expect(h.harness.realtimeSignals.length).toBe(3));
+  expect(vi.mocked(fetchBatch).mock.calls[1][2].config.ignoredCommentAuthors).toBe('linear-code');
+  expect(h.harness.inspection.sdk.callsTo('threads.send')).toHaveLength(0);
+  expect(db(h).prepare('SELECT * FROM pending').all()).toEqual([]);
+  // Under the same list, a person's comment is reported again.
+  resolveAll({ ...before, ignored: 'linear-code', fields: { checks: 'pending', comments: '2 (latest by tyler at t5)' } }); await due(h);
+  await cycle(h, () => expect(h.harness.inspection.sdk.callsTo('threads.send')).toHaveLength(1));
+  expect(sentText(h)).toBe('[Subscription update] [o/r#1](https://github.com/o/r/pull/1): comments: 1 latest by luke at t1 → 2 latest by tyler at t5.');
 });
 it('preserves baseline on delivery failure and retries without losing the change', async () => {
   const h = host(); resolveAll(snapshot);

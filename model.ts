@@ -3,6 +3,8 @@ export { platformSchema, type Platform } from './providers';
 export const snapshotSchema = z.object({
   title: z.string().max(1000), url: z.string().url(), state: z.string().max(200),
   updatedAt: z.string(), fields: z.record(z.string(), z.string().max(2000)),
+  /** Comment authors the provider left out of `fields`; absent when none are ignored. */
+  ignored: z.string().max(2000).optional(),
 });
 export type Snapshot = z.infer<typeof snapshotSchema>;
 export const subscriptionSchema = z.object({
@@ -11,13 +13,17 @@ export const subscriptionSchema = z.object({
 });
 export type Subscription = z.infer<typeof subscriptionSchema>;
 const clean = (s: string) => s.replace(/[\r\n\t]/g, ' ').replace(/[\[\]<>`()]/g, '').slice(0, 180);
-/** One item's changes between two snapshots, or null when nothing the plugin tracks changed. */
-export function describe(id: string, before: Snapshot, after: Snapshot): string | null {
+/**
+ * One item's changes between two snapshots, or null when nothing the plugin tracks changed.
+ * Snapshots read under different ignored authors count comments differently, so `commentField` is skipped between them.
+ */
+export function describe(id: string, before: Snapshot, after: Snapshot, commentField?: string): string | null {
   const changes: string[] = [];
+  const skip = (before.ignored ?? '') !== (after.ignored ?? '') ? commentField : undefined;
   if (before.state !== after.state) changes.push(`${clean(before.state)} → ${clean(after.state)}`);
   if (before.title !== after.title) changes.push('title updated');
   for (const key of new Set([...Object.keys(before.fields), ...Object.keys(after.fields)])) {
-    if (before.fields[key] !== after.fields[key]) changes.push(`${clean(key)}: ${clean(before.fields[key] || 'none')} → ${clean(after.fields[key] || 'none')}`);
+    if (key !== skip && before.fields[key] !== after.fields[key]) changes.push(`${clean(key)}: ${clean(before.fields[key] || 'none')} → ${clean(after.fields[key] || 'none')}`);
   }
   if (!changes.length) return null;
   return `[${clean(id)}](${after.url}): ${changes.slice(0, 5).join('; ')}${changes.length > 5 ? '; other fields updated' : ''}.`;

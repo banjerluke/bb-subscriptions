@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import type { Snapshot } from '../model';
-import { mapLimit, ProviderError, type Provider, type ProviderContext } from './types';
+import { ignoredAuthors, mapLimit, ProviderError, type Provider, type ProviderContext } from './types';
 const exec = promisify(execFile);
 
 export const githubQuery = `query SubscriptionPR($owner: String!, $repo: String!, $number: Int!) {
@@ -10,7 +10,7 @@ export const githubQuery = `query SubscriptionPR($owner: String!, $repo: String!
     title state isDraft updatedAt headRefOid reviewDecision
     assignees(first: 50) { nodes { login } }
     labels(first: 100) { nodes { name } }
-    comments(last: 1) { totalCount nodes { updatedAt author { login } } }
+    comments(last: 100) { totalCount nodes { updatedAt author { login } } }
     reviews(last: 1) { totalCount nodes { state submittedAt author { login } } }
     commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
   } }
@@ -34,15 +34,19 @@ export function githubRepositoryFromRemote(remote: string | null): string {
 /** True when the input needs a default repository to resolve (bare `123` or `#123`). */
 export const isBareNumber = (raw: string) => /^#?[1-9]\d*$/.test(raw.trim());
 
-export function toSnapshot(id: string, pr: z.infer<typeof prSchema>): Snapshot {
+export function toSnapshot(id: string, pr: z.infer<typeof prSchema>, ignored: string[] = []): Snapshot {
   const [repo, number] = id.split('#');
-  const review = pr.reviews.nodes[0]; const comment = pr.comments.nodes[0];
+  const kept = pr.comments.nodes.filter(c => !ignored.includes(c.author?.login.toLowerCase() ?? ''));
+  const review = pr.reviews.nodes[0]; const comment = kept.at(-1);
+  // Ignored comments older than the last 100 can't be subtracted, so a longer thread goes uncounted rather than drift.
+  const count = ignored.length && pr.comments.totalCount > pr.comments.nodes.length ? '' : `${pr.comments.totalCount - (pr.comments.nodes.length - kept.length)}`;
   return {
     title: pr.title, url: `https://github.com/${repo}/pull/${number}`, updatedAt: pr.updatedAt,
     state: pr.state === 'OPEN' && pr.isDraft ? 'draft' : pr.state.toLowerCase(),
+    ...(ignored.length ? { ignored: ignored.join(', ') } : {}),
     fields: {
       commit: pr.headRefOid.slice(0, 12),
-      comments: `${pr.comments.totalCount}${comment ? ` (latest by ${comment.author?.login ?? 'unknown'} at ${comment.updatedAt})` : ''}`,
+      comments: [count, comment && `(latest by ${comment.author?.login ?? 'unknown'} at ${comment.updatedAt})`].filter(Boolean).join(' '),
       reviews: `${pr.reviews.totalCount}${review ? ` (${review.author?.login ?? 'unknown'}: ${review.state.toLowerCase()} at ${review.submittedAt ?? 'pending'})` : ''}`,
       'review decision': pr.reviewDecision?.toLowerCase() ?? '',
       checks: pr.commits.nodes[0]?.commit.statusCheckRollup?.state.toLowerCase() ?? '',
@@ -52,7 +56,7 @@ export function toSnapshot(id: string, pr: z.infer<typeof prSchema>): Snapshot {
   };
 }
 
-async function fetchOne(id: string, { signal }: ProviderContext): Promise<Snapshot> {
+async function fetchOne(id: string, { config, signal }: ProviderContext): Promise<Snapshot> {
   const [repo, number] = id.split('#'); const [owner, name] = repo.split('/');
   const args = ['api', '--hostname', 'github.com', 'graphql', '-f', `query=${githubQuery}`, '-f', `owner=${owner}`, '-f', `repo=${name}`, '-F', `number=${number}`];
   let raw: unknown;
@@ -67,11 +71,11 @@ async function fetchOne(id: string, { signal }: ProviderContext): Promise<Snapsh
   }
   const parsed = envelope.parse(raw);
   if (parsed.errors?.length || !parsed.data?.repository?.pullRequest) throw new ProviderError('GitHub query failed; check PR access and gh authentication.');
-  return toSnapshot(id, parsed.data.repository.pullRequest);
+  return toSnapshot(id, parsed.data.repository.pullRequest, ignoredAuthors(config));
 }
 
 export const github: Provider = {
-  id: 'github', label: 'GitHub pull request', example: 'owner/repo#123',
+  id: 'github', label: 'GitHub pull request', example: 'owner/repo#123', commentField: 'comments',
   settings: {
     githubRepository: { type: 'string', label: 'Default GitHub repository (owner/repo)', description: 'Enables bare PR numbers outside a project thread. Project threads infer this from their git remote.', default: '' },
   },

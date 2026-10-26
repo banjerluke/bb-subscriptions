@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { batchQuery, linear, LINEAR_ENDPOINT, resetDelay } from './linear';
+import { batchQuery, linear, LINEAR_ENDPOINT, resetDelay, toSnapshot } from './linear';
 import { ProviderError } from './types';
 import { fetchBatch } from './index';
 const issue = (n: number) => ({ title: `Issue ${n}`, url: `https://linear.app/acme/issue/ENG-${n}/x`, updatedAt: '2026-01-01', state: { name: 'Todo' }, assignee: null, priority: 2, labels: { nodes: [] }, comments: { nodes: [] } });
@@ -45,6 +45,13 @@ describe('linear provider', () => {
     vi.stubGlobal('fetch', vi.fn(async () => reply({ errors: [{ message: 'no' }] }, { status: 401 })));
     const { pause } = await fetchBatch('linear', ['ENG-1'], ctx());
     expect(pause?.retryMs).toBe(3600_000); expect(pause?.message).toContain('read-only');
+  });
+  it('reports the most recently updated comment whose author is not ignored', () => {
+    const comments = { nodes: [{ id: 'c2', updatedAt: 't2', user: { name: 'Beaver' } }, { id: 'c1', updatedAt: 't1', user: { name: 'Luke Abbott' } }] };
+    expect(toSnapshot({ ...issue(1), comments }).fields['latest comment']).toBe('t2 by Beaver');
+    const snapshot = toSnapshot({ ...issue(1), comments }, ['beaver']);
+    expect(snapshot.fields['latest comment']).toBe('t1 by Luke Abbott');
+    expect(snapshot.ignored).toBe('beaver');
   });
   it('chunks fifty issues per request', () => {
     expect(batchQuery(['A-1', 'B-2']).aliases).toEqual(['i0', 'i1']);

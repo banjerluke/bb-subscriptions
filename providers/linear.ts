@@ -1,16 +1,16 @@
 import { z } from 'zod';
 import type { Snapshot } from '../model';
-import { ProviderError, type BatchResult, type FetchResult, type Provider, type ProviderContext } from './types';
+import { ignoredAuthors, ProviderError, type BatchResult, type FetchResult, type Provider, type ProviderContext } from './types';
 
 export const LINEAR_ENDPOINT = 'https://api.linear.app/graphql';
 /** Stop issuing requests when fewer than this many remain in the hourly window. */
 const REMAINING_FLOOR = 100;
-/** Issues per request; keeps complexity well under Linear's 10 000-point per-query cap. */
+/** Issues per request; even with 20 comments each this stays under Linear's 10 000-point per-query cap. */
 const CHUNK = 50;
 export const issueFields = `fragment IssueFields on Issue {
   title url updatedAt state { name } assignee { name } priority
   labels(first: 100) { nodes { name } }
-  comments(first: 1, orderBy: updatedAt) { nodes { id updatedAt user { name } } }
+  comments(first: 20, orderBy: updatedAt) { nodes { id updatedAt user { name } } }
 }`;
 const issueSchema = z.object({
   title: z.string(), url: z.string().url().refine(v => new URL(v).hostname === 'linear.app'), updatedAt: z.string(),
@@ -31,10 +31,11 @@ export function batchQuery(ids: string[]): { query: string; variables: Record<st
   return { query: `${issueFields}\nquery SubscriptionIssues(${params}) {\n  ${body}\n}`, variables: Object.fromEntries(aliases.map((a, i) => [a, ids[i]])), aliases };
 }
 
-export function toSnapshot(issue: z.infer<typeof issueSchema>): Snapshot {
-  const comment = issue.comments.nodes[0];
+export function toSnapshot(issue: z.infer<typeof issueSchema>, ignored: string[] = []): Snapshot {
+  const comment = issue.comments.nodes.find(c => !ignored.includes(c.user?.name.toLowerCase() ?? ''));
   return {
     title: issue.title, url: issue.url, state: issue.state.name, updatedAt: issue.updatedAt,
+    ...(ignored.length ? { ignored: ignored.join(', ') } : {}),
     fields: {
       assignee: issue.assignee?.name ?? '',
       priority: ['none', 'urgent', 'high', 'medium', 'low'][issue.priority] ?? String(issue.priority),
@@ -50,7 +51,7 @@ export function resetDelay(headers: Headers, now = Date.now()): number | null {
   return Number.isFinite(reset) && reset > 0 ? Math.max(60_000, reset - now) : null;
 }
 
-async function fetchChunk(ids: string[], key: string, signal: AbortSignal): Promise<FetchResult> {
+async function fetchChunk(ids: string[], key: string, ignored: string[], signal: AbortSignal): Promise<FetchResult> {
   const { query, variables, aliases } = batchQuery(ids);
   let response: Response;
   try {
@@ -74,7 +75,7 @@ async function fetchChunk(ids: string[], key: string, signal: AbortSignal): Prom
   aliases.forEach((alias, i) => {
     const issue = parsed.data.data?.[alias];
     const error = parsed.data.errors?.find(e => e.path?.[0] === alias);
-    if (issue) results.set(ids[i], toSnapshot(issue));
+    if (issue) results.set(ids[i], toSnapshot(issue, ignored));
     else if (error?.extensions?.code === 'AUTHENTICATION_ERROR') results.set(ids[i], new ProviderError('Linear rejected the API key. Generate a new read-only personal key and set linearApiKey.', 3600_000, true));
     else results.set(ids[i], new ProviderError('Linear issue not found or not visible to this key (check the key\'s team scope).'));
   });
@@ -82,7 +83,7 @@ async function fetchChunk(ids: string[], key: string, signal: AbortSignal): Prom
 }
 
 export const linear: Provider = {
-  id: 'linear', label: 'Linear issue', example: 'ENG-123',
+  id: 'linear', label: 'Linear issue', example: 'ENG-123', commentField: 'latest comment',
   settings: {
     linearApiKey: { type: 'string', label: 'Linear personal API key', description: 'Settings → Account → Security & access. Only the Read permission is needed; team-scoped keys work.', secret: true },
   },
@@ -98,7 +99,7 @@ export const linear: Provider = {
     if (!key) throw new ProviderError('Linear API key not set. Run: bb plugin config subscriptions set linearApiKey <read-only key>', 3600_000, true);
     const items: BatchResult = new Map(); let pause: ProviderError | undefined;
     for (let i = 0; i < ids.length; i += CHUNK) {
-      const chunk = await fetchChunk(ids.slice(i, i + CHUNK), key, signal);
+      const chunk = await fetchChunk(ids.slice(i, i + CHUNK), key, ignoredAuthors(config), signal);
       for (const [id, value] of chunk.items) items.set(id, value);
       pause ??= chunk.pause;
       if (pause) break;

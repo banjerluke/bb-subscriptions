@@ -19,10 +19,18 @@ export interface Provider {
   example: string;
   /** Settings merged into the plugin's settings page. Prefix keys with the provider id. */
   settings: Record<string, PluginSettingDescriptor>;
+  /** The `fields` key built from comments, which leaves out `ignoredAuthors(config)` and stamps them on the snapshot. */
+  commentField: string;
   /** Normalise user input (ID, URL, bare number) or throw with a usable message. */
   canonical(raw: string, ctx: { config: ProviderConfig; repository?: string }): string;
   /** Read the current state of one or more items. Missing keys are treated as lookup failures. */
   fetch(ids: string[], ctx: ProviderContext): Promise<FetchResult>;
+}
+
+/** The `ignoredCommentAuthors` setting, lowercased, de-duplicated and sorted so that reordering it changes nothing. */
+export function ignoredAuthors(config: ProviderConfig): string[] {
+  const raw = typeof config.ignoredCommentAuthors === 'string' ? config.ignoredCommentAuthors : '';
+  return [...new Set(raw.split(',').map(name => name.trim().toLowerCase()).filter(Boolean))].sort();
 }
 
 /** Run `fn` over `items` with at most `limit` in flight. */

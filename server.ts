@@ -22,6 +22,7 @@ export default function plugin(bb: BbPluginApi) {
   const settings = bb.settings.define({
     intervalSeconds: { type: 'number', label: 'Check interval in seconds', default: 60, experimental_schema: z.number().int().min(30).max(3600) },
     debounceSeconds: { type: 'number', label: 'Debounce notifications within (seconds)', description: 'Changes seen within this window go out as one message. While a thread is busy, later changes rewrite the message already waiting for it.', default: 10, experimental_schema: z.number().int().min(0).max(600) },
+    ignoredCommentAuthors: { type: 'string', label: 'Ignore comments by', description: 'Comma-separated GitHub logins and Linear user names, matched case-insensitively. Their comments and comment edits send no updates.', default: '', experimental_schema: z.string().max(1000) },
     ...providerSettings,
   });
   const db = bb.storage.database();
@@ -181,7 +182,7 @@ export default function plugin(bb: BbPluginApi) {
         for (const [key, before] of Object.entries(baselines)) {
           const [platform, id] = key.split(/:(.*)/s);
           const row = db.prepare('SELECT snapshot FROM subscriptions WHERE thread=? AND platform=? AND id=?').get(current.thread, platform, id) as Pick<Row, 'snapshot'> | undefined;
-          const line = row?.snapshot ? describe(id, before, snapshotSchema.parse(JSON.parse(row.snapshot))) : null;
+          const line = row?.snapshot ? describe(id, before, snapshotSchema.parse(JSON.parse(row.snapshot)), provider(platform).commentField) : null;
           if (line) lines.push(line);
         }
         const text = compose(lines);
@@ -214,7 +215,7 @@ export default function plugin(bb: BbPluginApi) {
         if (outcome instanceof ProviderError) throw outcome;
         const snapshot = snapshotSchema.parse(outcome);
         const before = current.snapshot ? snapshotSchema.parse(JSON.parse(current.snapshot)) : null;
-        if (before && describe(row.id, before, snapshot)) record(row.thread, `${row.platform}:${row.id}`, before, debounce);
+        if (before && describe(row.id, before, snapshot, provider(row.platform).commentField)) record(row.thread, `${row.platform}:${row.id}`, before, debounce);
         db.prepare('UPDATE subscriptions SET snapshot=?,error=NULL,checked=?,due=?,failures=0 WHERE thread=? AND platform=? AND id=?').run(JSON.stringify(snapshot), Date.now(), Date.now() + interval, row.thread, row.platform, row.id);
       } catch (cause) {
         const delay = cause instanceof ProviderError ? cause.retryMs : 60_000;
